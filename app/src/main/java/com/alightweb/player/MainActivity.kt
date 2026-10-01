@@ -6,25 +6,31 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.webkit.*
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.webkit.WebViewAssetLoader
+import kotlinx.coroutines.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
+    private lateinit var assetLoader: WebViewAssetLoader
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private val httpClient = OkHttpClient.Builder().build()
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -54,8 +60,17 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         progressBar = findViewById(R.id.progressBar)
 
+        setupAssetLoader()
         setupWebView()
         handleIntent(intent)
+    }
+
+    private fun setupAssetLoader() {
+        assetLoader = WebViewAssetLoader.Builder()
+            .setDomain("appassets.androidplatform.net")
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/res/", WebViewAssetLoader.ResourcesPathHandler(this))
+            .build()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -71,6 +86,10 @@ class MainActivity : AppCompatActivity() {
         settings.databaseEnabled = true
         settings.allowFileAccess = true
         settings.allowContentAccess = true
+        @Suppress("DEPRECATION")
+        settings.allowFileAccessFromFileURLs = true
+        @Suppress("DEPRECATION")
+        settings.allowUniversalAccessFromFileURLs = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -86,6 +105,11 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(WebAppInterface(this), "AndroidBridge")
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                Log.d("AMWebViewConsole", "${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
+                return true
+            }
+
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 if (newProgress < 100) {
                     progressBar.visibility = View.VISIBLE
@@ -119,17 +143,142 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return false
-                if (url.startsWith("file:///android_asset/")) {
-                    return false
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val uri = request?.url ?: return null
+                val path = uri.path ?: ""
+                val host = uri.host ?: ""
+
+                // 1. Asset Loader for HTTPS appassets domain
+                if (host == "appassets.androidplatform.net") {
+                    val intercepted = assetLoader.shouldInterceptRequest(uri)
+                    if (intercepted != null) return intercepted
                 }
-                return false
+
+                // 2. Intercept /api/ calls
+                if (path.startsWith("/api/")) {
+                    return handleApiRequest(uri, path)
+                }
+
+                // 3. Fallback to asset loader for /assets/
+                if (path.startsWith("/assets/")) {
+                    val intercepted = assetLoader.shouldInterceptRequest(uri)
+                    if (intercepted != null) return intercepted
+                }
+
+                return super.shouldInterceptRequest(view, request)
             }
         }
 
-        // Load Preset Player HTML from Assets
-        webView.loadUrl("file:///android_asset/runtime/preset.html")
+        // Load Preset Player via secure virtual domain to enable full CORS, Modules, and WebGL
+        webView.loadUrl("https://appassets.androidplatform.net/assets/runtime/preset.html")
+    }
+
+    private fun handleApiRequest(uri: Uri, path: String): WebResourceResponse? {
+        val headers = mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers" to "*"
+        )
+
+        return try {
+            when {
+                path == "/api/presets" -> {
+                    val json = buildPresetsJson()
+                    val bytes = json.toByteArray(StandardCharsets.UTF_8)
+                    WebResourceResponse("application/json", "utf-8", 200, "OK", headers, ByteArrayInputStream(bytes))
+                }
+                path.startsWith("/api/effect-bin") -> {
+                    val name = uri.getQueryParameter("name") ?: uri.lastPathSegment ?: ""
+                    val isStream = assets.open("runtime/effects_bin/$name")
+                    WebResourceResponse("application/octet-stream", "binary", 200, "OK", headers, isStream)
+                }
+                path.startsWith("/api/effect-xml") -> {
+                    val name = uri.getQueryParameter("name") ?: uri.lastPathSegment ?: ""
+                    val isStream = assets.open("runtime/effects_xml/$name")
+                    WebResourceResponse("text/xml", "utf-8", 200, "OK", headers, isStream)
+                }
+                path.startsWith("/api/link/") && path.contains("/media/") -> {
+                    // Serve cached package media if present
+                    val segs = uri.pathSegments
+                    val pkgIdx = segs.indexOf("link")
+                    if (pkgIdx != -1 && segs.size >= pkgIdx + 4) {
+                        val pkgId = segs[pkgIdx + 1]
+                        val filename = segs[pkgIdx + 3]
+                        try {
+                            val isStream = assets.open("packages/$pkgId/$filename")
+                            val mime = when {
+                                filename.endsWith(".png") -> "image/png"
+                                filename.endsWith(".jpg") || filename.endsWith(".jpeg") -> "image/jpeg"
+                                filename.endsWith(".mp4") -> "video/mp4"
+                                filename.endsWith(".wav") -> "audio/wav"
+                                filename.endsWith(".mp3") -> "audio/mpeg"
+                                else -> "application/octet-stream"
+                            }
+                            return WebResourceResponse(mime, null, 200, "OK", headers, isStream)
+                        } catch (e: Exception) {
+                            // forward to cloudflare below
+                        }
+                    }
+                    proxyRemoteApi(uri)
+                }
+                else -> {
+                    // Forward all other API calls to Cloudflare backend
+                    proxyRemoteApi(uri)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("API_INTERCEPT", "Error handling API: $path", e)
+            proxyRemoteApi(uri)
+        }
+    }
+
+    private fun proxyRemoteApi(uri: Uri): WebResourceResponse? {
+        val targetUrl = "https://alight-web-editor.pages.dev${uri.path}${if (uri.query != null) "?${uri.query}" else ""}"
+        return try {
+            val req = Request.Builder()
+                .url(targetUrl)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AlightWeb/1.0")
+                .build()
+            val resp = httpClient.newCall(req).execute()
+            val mime = resp.header("Content-Type", "application/json")?.substringBefore(";") ?: "application/json"
+            val headers = mapOf(
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers" to "*"
+            )
+            WebResourceResponse(mime, "utf-8", resp.code, "OK", headers, resp.body?.byteStream())
+        } catch (e: Exception) {
+            Log.e("API_PROXY", "Error proxying: $targetUrl", e)
+            null
+        }
+    }
+
+    private fun buildPresetsJson(): String {
+        val root = JSONObject()
+        val imagesArr = JSONArray()
+        val presetsArr = JSONArray()
+
+        val presetFiles = assets.list("runtime/preset") ?: assets.list("preset") ?: emptyArray()
+        for (f in presetFiles) {
+            val item = JSONObject()
+            item.put("name", f)
+            item.put("isDirectory", false)
+            item.put("size", 100000)
+            if (f.endsWith(".xml")) {
+                item.put("ext", ".xml")
+                presetsArr.put(item)
+            } else if (f.endsWith(".jpg") || f.endsWith(".png") || f.endsWith(".mp4") || f.endsWith(".mp3")) {
+                item.put("ext", "." + f.substringAfterLast('.'))
+                imagesArr.put(item)
+            }
+        }
+
+        root.put("images", imagesArr)
+        root.put("presets", presetsArr)
+        return root.toString()
     }
 
     private fun handleIntent(intent: Intent) {
@@ -174,5 +323,10 @@ class MainActivity : AppCompatActivity() {
         } else {
             super.onBackPressed()
         }
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 }
