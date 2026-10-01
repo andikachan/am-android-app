@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="8dp"
+    android:layout_marginVertical="3dp"
+    android:background="@drawable/bg_card"
+    android:padding="8dp">
+
+    <TextView
+        android:id="@+id/layerTypeBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/badge_shape"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="2dp"
+        android:text="SHAPE"
+        android:textColor="#03222C"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/layerName"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Layer Name"
+        android:textColor="#E9ECF3"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toStartOf="@id/layerVisibilityBtn"
+        app:layout_constraintStart_toEndOf="@id/layerTypeBadge"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/layerTiming"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:text="0.00s - 5.00s"
+        android:textColor="#8C93A7"
+        android:textSize="11sp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/layerVisibilityBtn"
+        app:layout_constraintStart_toEndOf="@id/layerTypeBadge"
+        app:layout_constraintTop_toBottomOf="@id/layerName" />
+
+    <ImageButton
+        android:id="@+id/layerVisibilityBtn"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Toggle Visibility"
+        android:src="@android:drawable/ic_menu_view"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

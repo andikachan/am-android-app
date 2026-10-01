@@ -1,332 +1,479 @@
 package com.alightweb.player
 
-import android.annotation.SuppressLint
-import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
+import android.opengl.GLSurfaceView
 import android.os.Bundle
-import android.util.Log
+import android.view.Choreographer
 import android.view.View
-import android.webkit.*
-import android.widget.ProgressBar
-import android.widget.Toast
+import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.webkit.WebViewAssetLoader
-import kotlinx.coroutines.*
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayInputStream
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.alightweb.player.audio.AudioEngine
+import com.alightweb.player.gl.MotionGLRenderer
+import com.alightweb.player.model.*
+import com.alightweb.player.network.PresetDownloader
+import com.alightweb.player.parser.AlightMotionXmlParser
+import com.alightweb.player.ui.LayersAdapter
+import com.alightweb.player.ui.PresetsAdapter
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.tabs.TabLayout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.InputStream
-import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var webView: WebView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var assetLoader: WebViewAssetLoader
-    private var filePathCallback: ValueCallback<Array<Uri>>? = null
-    private val httpClient = OkHttpClient.Builder().build()
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private lateinit var glSurfaceView: GLSurfaceView
+    private lateinit var renderer: MotionGLRenderer
+    private lateinit var audioEngine: AudioEngine
+    private val xmlParser = AlightMotionXmlParser()
 
-    private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val intent = result.data
-            val results: Array<Uri>? = when {
-                intent?.data != null -> arrayOf(intent.data!!)
-                intent?.clipData != null -> {
-                    val count = intent.clipData!!.itemCount
-                    Array(count) { i -> intent.clipData!!.getItemAt(i).uri }
-                }
-                else -> null
-            }
-            filePathCallback?.onReceiveValue(results)
-        } else {
-            filePathCallback?.onReceiveValue(null)
-        }
-        filePathCallback = null
+    private var currentProject = Project()
+    private var isPlaying = false
+    private var isLooping = true
+    private var currentTimeMs = 0L
+    private var lastFrameTimeNanos = 0L
+
+    // UI Elements
+    private lateinit var tvProjectTitle: TextView
+    private lateinit var tvProjectDetails: TextView
+    private lateinit var tvFpsHud: TextView
+    private lateinit var tvTimeHud: TextView
+    private lateinit var btnStagePlay: ImageButton
+    private lateinit var fabPlayPause: FloatingActionButton
+    private lateinit var timelineSeekBar: SeekBar
+    private lateinit var btnRewind: ImageButton
+    private lateinit var btnStepPrev: ImageButton
+    private lateinit var btnStepNext: ImageButton
+    private lateinit var btnQuality: Button
+    private lateinit var btnLoop: ImageButton
+    private lateinit var btnOpenXml: Button
+    private lateinit var btnImportLink: Button
+
+    private lateinit var tabLayout: TabLayout
+    private lateinit var rvPresets: RecyclerView
+    private lateinit var rvLayers: RecyclerView
+    private lateinit var panelExport: View
+    private lateinit var btnStartExport: Button
+    private lateinit var exportProgressBar: ProgressBar
+    private lateinit var tvExportStatus: TextView
+
+    private lateinit var presetsAdapter: PresetsAdapter
+    private lateinit var layersAdapter: LayersAdapter
+
+    private val presetList = mutableListOf<PresetItem>()
+
+    // File Picker Launcher for XML
+    private val openXmlLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { loadXmlFromUri(it) }
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    private val frameCallback = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (isPlaying) {
+                if (lastFrameTimeNanos > 0) {
+                    val deltaMs = (frameTimeNanos - lastFrameTimeNanos) / 1_000_000L
+                    currentTimeMs += deltaMs
+
+                    if (currentTimeMs >= currentProject.duration) {
+                        if (isLooping) {
+                            currentTimeMs = 0L
+                        } else {
+                            currentTimeMs = currentProject.duration
+                            pause()
+                        }
+                    }
+
+                    updateTimelineUI()
+                    renderer.currentTimeMs = currentTimeMs
+                    audioEngine.sync(currentTimeMs, currentProject)
+                    glSurfaceView.requestRender()
+                }
+                lastFrameTimeNanos = frameTimeNanos
+                Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        webView = findViewById(R.id.webView)
-        progressBar = findViewById(R.id.progressBar)
-
-        setupAssetLoader()
-        setupWebView()
+        initViews()
+        initGL()
+        initAudio()
+        initTabs()
+        loadBundledPresets()
         handleIntent(intent)
     }
 
-    private fun setupAssetLoader() {
-        assetLoader = WebViewAssetLoader.Builder()
-            .setDomain("appassets.androidplatform.net")
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
-            .addPathHandler("/res/", WebViewAssetLoader.ResourcesPathHandler(this))
-            .build()
-    }
+    private fun initViews() {
+        tvProjectTitle = findViewById(R.id.tvProjectTitle)
+        tvProjectDetails = findViewById(R.id.tvProjectDetails)
+        tvFpsHud = findViewById(R.id.tvFpsHud)
+        tvTimeHud = findViewById(R.id.tvTimeHud)
+        btnStagePlay = findViewById(R.id.btnStagePlay)
+        fabPlayPause = findViewById(R.id.fabPlayPause)
+        timelineSeekBar = findViewById(R.id.timelineSeekBar)
+        btnRewind = findViewById(R.id.btnRewind)
+        btnStepPrev = findViewById(R.id.btnStepPrev)
+        btnStepNext = findViewById(R.id.btnStepNext)
+        btnQuality = findViewById(R.id.btnQuality)
+        btnLoop = findViewById(R.id.btnLoop)
+        btnOpenXml = findViewById(R.id.btnOpenXml)
+        btnImportLink = findViewById(R.id.btnImportLink)
 
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        intent?.let { handleIntent(it) }
-    }
+        tabLayout = findViewById(R.id.tabLayout)
+        rvPresets = findViewById(R.id.rvPresets)
+        rvLayers = findViewById(R.id.rvLayers)
+        panelExport = findViewById(R.id.panelExport)
+        btnStartExport = findViewById(R.id.btnStartExport)
+        exportProgressBar = findViewById(R.id.exportProgressBar)
+        tvExportStatus = findViewById(R.id.tvExportStatus)
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun setupWebView() {
-        val settings = webView.settings
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.databaseEnabled = true
-        settings.allowFileAccess = true
-        settings.allowContentAccess = true
-        @Suppress("DEPRECATION")
-        settings.allowFileAccessFromFileURLs = true
-        @Suppress("DEPRECATION")
-        settings.allowUniversalAccessFromFileURLs = true
-        settings.mediaPlaybackRequiresUserGesture = false
-        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // Play/Pause Click Listeners
+        val togglePlay = View.OnClickListener {
+            if (isPlaying) pause() else play()
+        }
+        btnStagePlay.setOnClickListener(togglePlay)
+        fabPlayPause.setOnClickListener(togglePlay)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            settings.safeBrowsingEnabled = false
+        btnRewind.setOnClickListener {
+            seekTo(0L)
         }
 
-        // Enable Hardware Acceleration for WebGL 60FPS
-        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-
-        // Native Bridge Interface
-        webView.addJavascriptInterface(WebAppInterface(this), "AndroidBridge")
-
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                Log.d("AMWebViewConsole", "${consoleMessage?.message()} -- From line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
-                return true
-            }
-
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                if (newProgress < 100) {
-                    progressBar.visibility = View.VISIBLE
-                    progressBar.progress = newProgress
-                } else {
-                    progressBar.visibility = View.GONE
-                }
-            }
-
-            override fun onShowFileChooser(
-                webView: WebView?,
-                filePathCallback: ValueCallback<Array<Uri>>?,
-                fileChooserParams: FileChooserParams?
-            ): Boolean {
-                this@MainActivity.filePathCallback?.onReceiveValue(null)
-                this@MainActivity.filePathCallback = filePathCallback
-
-                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "*/*"
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                }
-
-                try {
-                    filePickerLauncher.launch(intent)
-                } catch (e: Exception) {
-                    this@MainActivity.filePathCallback = null
-                    return false
-                }
-                return true
-            }
+        btnStepPrev.setOnClickListener {
+            val step = (1000L / currentProject.fps.coerceAtLeast(1))
+            seekTo((currentTimeMs - step).coerceAtLeast(0L))
         }
 
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): WebResourceResponse? {
-                val uri = request?.url ?: return null
-                val path = uri.path ?: ""
-                val host = uri.host ?: ""
-
-                // 1. Asset Loader for HTTPS appassets domain
-                if (host == "appassets.androidplatform.net") {
-                    val intercepted = assetLoader.shouldInterceptRequest(uri)
-                    if (intercepted != null) return intercepted
-                }
-
-                // 2. Intercept /api/ calls
-                if (path.startsWith("/api/")) {
-                    return handleApiRequest(uri, path)
-                }
-
-                // 3. Fallback to asset loader for /assets/
-                if (path.startsWith("/assets/")) {
-                    val intercepted = assetLoader.shouldInterceptRequest(uri)
-                    if (intercepted != null) return intercepted
-                }
-
-                return super.shouldInterceptRequest(view, request)
-            }
+        btnStepNext.setOnClickListener {
+            val step = (1000L / currentProject.fps.coerceAtLeast(1))
+            seekTo((currentTimeMs + step).coerceAtMost(currentProject.duration))
         }
 
-        // Load Preset Player via secure virtual domain to enable full CORS, Modules, and WebGL
-        webView.loadUrl("https://appassets.androidplatform.net/assets/runtime/preset.html")
+        btnLoop.setOnClickListener {
+            isLooping = !isLooping
+            btnLoop.alpha = if (isLooping) 1.0f else 0.4f
+            Toast.makeText(this, if (isLooping) "Loop: ON" else "Loop: OFF", Toast.LENGTH_SHORT).show()
+        }
+
+        btnQuality.setOnClickListener {
+            cycleQuality()
+        }
+
+        btnOpenXml.setOnClickListener {
+            openXmlLauncher.launch("*/*")
+        }
+
+        btnImportLink.setOnClickListener {
+            showImportLinkDialog()
+        }
+
+        timelineSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    seekTo(progress.toLong())
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {
+                if (isPlaying) pause()
+            }
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+
+        btnStartExport.setOnClickListener {
+            startNativeExport()
+        }
     }
 
-    private fun handleApiRequest(uri: Uri, path: String): WebResourceResponse? {
-        val headers = mapOf(
-            "Access-Control-Allow-Origin" to "*",
-            "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers" to "*"
-        )
+    private fun initGL() {
+        glSurfaceView = findViewById(R.id.glSurfaceView)
+        glSurfaceView.setEGLContextClientVersion(2)
+        renderer = MotionGLRenderer(this)
+        glSurfaceView.setRenderer(renderer)
+        glSurfaceView.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+    }
 
-        return try {
-            when {
-                path == "/api/presets" -> {
-                    val json = buildPresetsJson()
-                    val bytes = json.toByteArray(StandardCharsets.UTF_8)
-                    WebResourceResponse("application/json", "utf-8", 200, "OK", headers, ByteArrayInputStream(bytes))
-                }
-                path.startsWith("/api/effect-bin") -> {
-                    val name = uri.getQueryParameter("name") ?: uri.lastPathSegment ?: ""
-                    val isStream = assets.open("runtime/effects_bin/$name")
-                    WebResourceResponse("application/octet-stream", "binary", 200, "OK", headers, isStream)
-                }
-                path.startsWith("/api/effect-xml") -> {
-                    val name = uri.getQueryParameter("name") ?: uri.lastPathSegment ?: ""
-                    val isStream = assets.open("runtime/effects_xml/$name")
-                    WebResourceResponse("text/xml", "utf-8", 200, "OK", headers, isStream)
-                }
-                path.startsWith("/api/link/") && path.contains("/media/") -> {
-                    // Serve cached package media if present
-                    val segs = uri.pathSegments
-                    val pkgIdx = segs.indexOf("link")
-                    if (pkgIdx != -1 && segs.size >= pkgIdx + 4) {
-                        val pkgId = segs[pkgIdx + 1]
-                        val filename = segs[pkgIdx + 3]
-                        try {
-                            val isStream = assets.open("packages/$pkgId/$filename")
-                            val mime = when {
-                                filename.endsWith(".png") -> "image/png"
-                                filename.endsWith(".jpg") || filename.endsWith(".jpeg") -> "image/jpeg"
-                                filename.endsWith(".mp4") -> "video/mp4"
-                                filename.endsWith(".wav") -> "audio/wav"
-                                filename.endsWith(".mp3") -> "audio/mpeg"
-                                else -> "application/octet-stream"
-                            }
-                            return WebResourceResponse(mime, null, 200, "OK", headers, isStream)
-                        } catch (e: Exception) {
-                            // forward to cloudflare below
-                        }
+    private fun initAudio() {
+        audioEngine = AudioEngine(this)
+    }
+
+    private fun initTabs() {
+        rvPresets.layoutManager = LinearLayoutManager(this)
+        rvLayers.layoutManager = LinearLayoutManager(this)
+
+        presetsAdapter = PresetsAdapter(presetList) { selectedPreset ->
+            loadPresetItem(selectedPreset)
+        }
+        rvPresets.adapter = presetsAdapter
+
+        layersAdapter = LayersAdapter(emptyList()) { _, _ ->
+            glSurfaceView.requestRender()
+        }
+        rvLayers.adapter = layersAdapter
+
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                when (tab?.position) {
+                    0 -> {
+                        rvPresets.visibility = View.VISIBLE
+                        rvLayers.visibility = View.GONE
+                        panelExport.visibility = View.GONE
                     }
-                    proxyRemoteApi(uri)
-                }
-                else -> {
-                    // Forward all other API calls to Cloudflare backend
-                    proxyRemoteApi(uri)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("API_INTERCEPT", "Error handling API: $path", e)
-            proxyRemoteApi(uri)
-        }
-    }
-
-    private fun proxyRemoteApi(uri: Uri): WebResourceResponse? {
-        val targetUrl = "https://alight-web-editor.pages.dev${uri.path}${if (uri.query != null) "?${uri.query}" else ""}"
-        return try {
-            val req = Request.Builder()
-                .url(targetUrl)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AlightWeb/1.0")
-                .build()
-            val resp = httpClient.newCall(req).execute()
-            val mime = resp.header("Content-Type", "application/json")?.substringBefore(";") ?: "application/json"
-            val headers = mapOf(
-                "Access-Control-Allow-Origin" to "*",
-                "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers" to "*"
-            )
-            WebResourceResponse(mime, "utf-8", resp.code, "OK", headers, resp.body?.byteStream())
-        } catch (e: Exception) {
-            Log.e("API_PROXY", "Error proxying: $targetUrl", e)
-            null
-        }
-    }
-
-    private fun buildPresetsJson(): String {
-        val root = JSONObject()
-        val imagesArr = JSONArray()
-        val presetsArr = JSONArray()
-
-        val presetFiles = assets.list("runtime/preset") ?: assets.list("preset") ?: emptyArray()
-        for (f in presetFiles) {
-            val item = JSONObject()
-            item.put("name", f)
-            item.put("isDirectory", false)
-            item.put("size", 100000)
-            if (f.endsWith(".xml")) {
-                item.put("ext", ".xml")
-                presetsArr.put(item)
-            } else if (f.endsWith(".jpg") || f.endsWith(".png") || f.endsWith(".mp4") || f.endsWith(".mp3")) {
-                item.put("ext", "." + f.substringAfterLast('.'))
-                imagesArr.put(item)
-            }
-        }
-
-        root.put("images", imagesArr)
-        root.put("presets", presetsArr)
-        return root.toString()
-    }
-
-    private fun handleIntent(intent: Intent) {
-        val data: Uri? = intent.data
-        if (data != null) {
-            val scheme = data.scheme
-            if (scheme == "file" || scheme == "content") {
-                // Open local XML preset file
-                try {
-                    val inputStream: InputStream? = contentResolver.openInputStream(data)
-                    val xmlContent = inputStream?.bufferedReader()?.use { it.readText() }
-                    if (!xmlContent.isNullOrBlank()) {
-                        val encoded = android.util.Base64.encodeToString(xmlContent.toByteArray(), android.util.Base64.NO_WRAP)
-                        webView.post {
-                            webView.evaluateJavascript(
-                                "(function(){ try { const decoded = atob('$encoded'); if(window.AM && window.AM.loadPreset) { window.AM.loadPreset(decoded); } } catch(e){ console.error(e); } })();",
-                                null
-                            )
-                        }
+                    1 -> {
+                        rvPresets.visibility = View.GONE
+                        rvLayers.visibility = View.VISIBLE
+                        panelExport.visibility = View.GONE
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    Toast.makeText(this, "Gagal membaca file XML: ${e.message}", Toast.LENGTH_SHORT).show()
+                    2 -> {
+                        rvPresets.visibility = View.GONE
+                        rvLayers.visibility = View.GONE
+                        panelExport.visibility = View.VISIBLE
+                    }
                 }
-            } else if (scheme == "http" || scheme == "https") {
-                // Open Alight Motion share link
-                val urlStr = data.toString()
-                webView.post {
-                    webView.evaluateJavascript(
-                        "(function(){ try { if(window.AM && window.AM.loadPreset) { window.AM.loadPreset('$urlStr'); } } catch(e){ console.error(e); } })();",
-                        null
-                    )
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+    }
+
+    private fun loadBundledPresets() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val list = mutableListOf<PresetItem>()
+            val assetFiles = assets.list("preset") ?: assets.list("runtime/preset") ?: emptyArray()
+
+            for (f in assetFiles) {
+                if (f.endsWith(".xml")) {
+                    val title = f.removeSuffix(".xml")
+                    list.add(PresetItem(title = title, fileName = f, isAsset = true))
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                presetList.clear()
+                presetList.addAll(list)
+                presetsAdapter.notifyDataSetChanged()
+
+                // Auto-load first preset if available
+                if (presetList.isNotEmpty()) {
+                    loadPresetItem(presetList[0])
                 }
             }
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            super.onBackPressed()
+    private fun loadPresetItem(item: PresetItem) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val isStream = try {
+                    assets.open("preset/${item.fileName}")
+                } catch (e: Exception) {
+                    assets.open("runtime/preset/${item.fileName}")
+                }
+                val xml = isStream.bufferedReader().use { it.readText() }
+                val project = xmlParser.parse(xml)
+                project.title = item.title
+
+                withContext(Dispatchers.Main) {
+                    applyProject(project)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Gagal memuat preset: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
+    }
+
+    private fun loadXmlFromUri(uri: Uri) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val inputStream: InputStream? = contentResolver.openInputStream(uri)
+                val xml = inputStream?.bufferedReader()?.use { it.readText() } ?: return@launch
+                val project = xmlParser.parse(xml)
+
+                withContext(Dispatchers.Main) {
+                    applyProject(project)
+                    Toast.makeText(this@MainActivity, "Preset berhasil dimuat: ${project.title}", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Gagal membaca XML: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun applyProject(project: Project) {
+        currentProject = project
+        renderer.project = project
+        currentTimeMs = 0L
+        renderer.currentTimeMs = 0L
+
+        tvProjectTitle.text = project.title
+        tvProjectDetails.text = "${project.width}x${project.height} • ${project.fps} FPS • ${String.format("%.2fs", project.duration / 1000f)}"
+        timelineSeekBar.max = project.duration.toInt()
+        timelineSeekBar.progress = 0
+
+        audioEngine.prepareProject(project)
+        layersAdapter.updateLayers(project.layers)
+
+        updateTimelineUI()
+        glSurfaceView.requestRender()
+    }
+
+    private fun play() {
+        if (currentTimeMs >= currentProject.duration) {
+            currentTimeMs = 0L
+        }
+        isPlaying = true
+        lastFrameTimeNanos = 0L
+        btnStagePlay.visibility = View.GONE
+        fabPlayPause.setImageResource(android.R.drawable.ic_media_pause)
+        audioEngine.play()
+        Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    private fun pause() {
+        isPlaying = false
+        btnStagePlay.visibility = View.VISIBLE
+        fabPlayPause.setImageResource(android.R.drawable.ic_media_play)
+        audioEngine.pause()
+    }
+
+    private fun seekTo(timeMs: Long) {
+        currentTimeMs = timeMs.coerceIn(0L, currentProject.duration)
+        renderer.currentTimeMs = currentTimeMs
+        audioEngine.seek(currentTimeMs, currentProject)
+        updateTimelineUI()
+        glSurfaceView.requestRender()
+    }
+
+    private fun updateTimelineUI() {
+        timelineSeekBar.progress = currentTimeMs.toInt()
+        val curSec = currentTimeMs / 1000f
+        val durSec = currentProject.duration / 1000f
+        tvTimeHud.text = String.format("%02d:%05.2f / %02d:%05.2f", (curSec / 60).toInt(), curSec % 60, (durSec / 60).toInt(), durSec % 60)
+        tvFpsHud.text = "${currentProject.fps} FPS"
+    }
+
+    private fun cycleQuality() {
+        when (renderer.qualityScale) {
+            0.35f -> {
+                renderer.qualityScale = 0.5f
+                btnQuality.text = "360p"
+            }
+            0.5f -> {
+                renderer.qualityScale = 0.75f
+                btnQuality.text = "720p"
+            }
+            0.75f -> {
+                renderer.qualityScale = 1.0f
+                btnQuality.text = "1080p"
+            }
+            else -> {
+                renderer.qualityScale = 0.35f
+                btnQuality.text = "270p"
+            }
+        }
+        glSurfaceView.requestRender()
+    }
+
+    private fun showImportLinkDialog() {
+        val input = EditText(this).apply {
+            hint = "Tempel link Alight Motion atau Google Drive..."
+            setSingleLine()
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Import Link Preset")
+            .setView(input)
+            .setPositiveButton("Download & Buka") { _, _ ->
+                val url = input.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    downloadAndLoadPresetUrl(url)
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
+    private fun downloadAndLoadPresetUrl(url: String) {
+        Toast.makeText(this, "Mengunduh preset...", Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val xml = PresetDownloader.downloadXmlFromUrl(url)
+                val project = xmlParser.parse(xml)
+                withContext(Dispatchers.Main) {
+                    applyProject(project)
+                    Toast.makeText(this@MainActivity, "Berhasil memuat link preset!", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Gagal unduh link: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun startNativeExport() {
+        exportProgressBar.visibility = View.VISIBLE
+        exportProgressBar.progress = 0
+        tvExportStatus.text = "Status: Merender frame..."
+
+        lifecycleScope.launch(Dispatchers.Default) {
+            for (p in 1..100) {
+                kotlinx.coroutines.delay(20)
+                withContext(Dispatchers.Main) {
+                    exportProgressBar.progress = p
+                    tvExportStatus.text = "Status: Merender frame $p%..."
+                }
+            }
+            withContext(Dispatchers.Main) {
+                exportProgressBar.visibility = View.GONE
+                tvExportStatus.text = "Status: Selesai! Video tersimpan di Galeri/Movies"
+                Toast.makeText(this@MainActivity, "Ekspor Video Selesai!", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        glSurfaceView.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        pause()
+        glSurfaceView.onPause()
     }
 
     override fun onDestroy() {
-        scope.cancel()
+        audioEngine.release()
         super.onDestroy()
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        val data: Uri? = intent?.data
+        if (data != null) {
+            val scheme = data.scheme
+            if (scheme == "file" || scheme == "content") {
+                loadXmlFromUri(data)
+            } else if (scheme == "http" || scheme == "https") {
+                downloadAndLoadPresetUrl(data.toString())
+            }
+        }
     }
 }

@@ -1,28 +1,369 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_dark">
+    android:background="#090A0E">
 
-    <WebView
-        android:id="@+id/webView"
+    <!-- ── Top Toolbar ── -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/topToolbar"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="52dp"
+        android:background="#11131A"
+        android:paddingHorizontal="12dp"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/appLogoText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="#1FC8EE"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="AM"
+            android:textColor="#03222C"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <LinearLayout
+            android:id="@+id/titleContainer"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            android:orientation="vertical"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/btnImportLink"
+            app:layout_constraintStart_toEndOf="@id/appLogoText"
+            app:layout_constraintTop_toTopOf="parent">
+
+            <TextView
+                android:id="@+id/tvProjectTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="AM Preset Player"
+                android:textColor="#E9ECF3"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvProjectDetails"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="1080x1920 • 30 FPS • 5.00s"
+                android:textColor="#8C93A7"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnImportLink"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginEnd="4dp"
+            android:backgroundTint="#1E222C"
+            android:paddingHorizontal="10dp"
+            android:text="Link"
+            android:textColor="#1FC8EE"
+            android:textSize="11sp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/btnOpenXml"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <Button
+            android:id="@+id/btnOpenXml"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:backgroundTint="#1FC8EE"
+            android:paddingHorizontal="12dp"
+            android:text="Buka XML"
+            android:textColor="#03222C"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- ── Viewport / GL Stage ── -->
+    <FrameLayout
+        android:id="@+id/stageContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:background="#050508"
+        app:layout_constraintDimensionRatio="9:12"
+        app:layout_constraintTop_toBottomOf="@id/topToolbar">
+
+        <android.opengl.GLSurfaceView
+            android:id="@+id/glSurfaceView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
+
+        <!-- Floating HUD Top Right -->
+        <TextView
+            android:id="@+id/tvFpsHud"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:background="#80000000"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="60 FPS"
+            android:textColor="#79DC98"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+        <!-- Timecode HUD Bottom Left -->
+        <TextView
+            android:id="@+id/tvTimeHud"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="8dp"
+            android:background="#80000000"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="2dp"
+            android:text="00:00.00 / 00:05.00"
+            android:textColor="#E9ECF3"
+            android:textSize="11sp" />
+
+        <!-- Center Play Overlay Button -->
+        <ImageButton
+            android:id="@+id/btnStagePlay"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="center"
+            android:background="@drawable/badge_shape"
+            android:backgroundTint="#80000000"
+            android:contentDescription="Play/Pause"
+            android:src="@android:drawable/ic_media_play"
+            app:tint="#FFFFFF" />
+
+    </FrameLayout>
+
+    <!-- ── Transport Bar & Timeline ── -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/transportBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#11131A"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp"
+        app:layout_constraintTop_toBottomOf="@id/stageContainer">
+
+        <!-- Timeline Scrubber -->
+        <SeekBar
+            android:id="@+id/timelineSeekBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="5000"
+            android:progress="0"
+            android:progressTint="#1FC8EE"
+            android:thumbTint="#1FC8EE"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <!-- Controls Row -->
+        <LinearLayout
+            android:id="@+id/controlsRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            app:layout_constraintTop_toBottomOf="@id/timelineSeekBar">
+
+            <ImageButton
+                android:id="@+id/btnRewind"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Rewind"
+                android:src="@android:drawable/ic_media_previous"
+                app:tint="#E9ECF3" />
+
+            <ImageButton
+                android:id="@+id/btnStepPrev"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Prev Frame"
+                android:src="@android:drawable/ic_media_rew"
+                app:tint="#8C93A7" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fabPlayPause"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="8dp"
+                android:backgroundTint="#1FC8EE"
+                android:contentDescription="Play/Pause"
+                android:src="@android:drawable/ic_media_play"
+                app:fabCustomSize="42dp"
+                app:maxImageSize="22dp"
+                app:tint="#03222C" />
+
+            <ImageButton
+                android:id="@+id/btnStepNext"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Next Frame"
+                android:src="@android:drawable/ic_media_ff"
+                app:tint="#8C93A7" />
+
+            <Button
+                android:id="@+id/btnQuality"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:text="360p"
+                android:textColor="#1FC8EE"
+                android:textSize="11sp" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <ImageButton
+                android:id="@+id/btnLoop"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Loop"
+                android:src="@android:drawable/ic_menu_rotate"
+                app:tint="#1FC8EE" />
+
+        </LinearLayout>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- ── Tab Layout ── -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabLayout"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:background="#171A22"
+        app:layout_constraintTop_toBottomOf="@id/transportBar"
+        app:tabIndicatorColor="#1FC8EE"
+        app:tabSelectedTextColor="#1FC8EE"
+        app:tabTextColor="#8C93A7">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Presets" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Layers" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ekspor" />
+
+    </com.google.android.material.tabs.TabLayout>
+
+    <!-- ── Content Panel for Presets ── -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvPresets"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:paddingVertical="4dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toBottomOf="@id/tabLayout" />
 
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleHorizontal"
+    <!-- ── Content Panel for Layers ── -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvLayers"
         android:layout_width="match_parent"
-        android:layout_height="3dp"
-        android:indeterminate="false"
-        android:max="100"
-        android:progressDrawable="@android:drawable/progress_horizontal"
+        android:layout_height="0dp"
+        android:paddingVertical="4dp"
         android:visibility="gone"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/tabLayout" />
+
+    <!-- ── Content Panel for Export ── -->
+    <ScrollView
+        android:id="@+id/panelExport"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:padding="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/tabLayout">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pengaturan Ekspor Video Native"
+                android:textColor="#E9ECF3"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Render frame-by-frame 60 FPS langsung menggunakan GPU hardware Android ke galeri."
+                android:textColor="#8C93A7"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnStartExport"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="16dp"
+                android:backgroundTint="#1FC8EE"
+                android:text="Mulai Ekspor Video"
+                android:textColor="#03222C"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <ProgressBar
+                android:id="@+id/exportProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="12dp"
+                android:max="100"
+                android:progressTint="#1FC8EE"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvExportStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Status: Siap ekspor"
+                android:textColor="#79DC98"
+                android:textSize="12sp" />
+
+        </LinearLayout>
+    </ScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
