@@ -27,7 +27,7 @@ class CubicBezierInterpolator(
         if (p1x == p1y && p2x == p2y) return t // linear
 
         val solvedT = solveX(t)
-        return solveY(solvedT)
+        return sampleY(solvedT)
     }
 
     private fun sampleX(t: Float): Float = ((ax * t + bx) * t + cx) * t
