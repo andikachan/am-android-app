@@ -34,7 +34,7 @@ class PresetsAdapter(
 
         holder.itemView.setOnClickListener {
             val prev = selectedIndex
-            selectedIndex = holder.bindingAdapterPosition
+            selectedIndex = holder.adapterPosition
             notifyItemChanged(prev)
             notifyItemChanged(selectedIndex)
             onSelect(item)

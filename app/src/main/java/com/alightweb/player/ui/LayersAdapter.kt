@@ -61,7 +61,7 @@ class LayersAdapter(
 
         holder.eyeButton.setOnClickListener {
             layer.visible = !layer.visible
-            notifyItemChanged(holder.bindingAdapterPosition)
+            notifyItemChanged(holder.adapterPosition)
             onVisibilityChanged(layer, layer.visible)
         }
     }
