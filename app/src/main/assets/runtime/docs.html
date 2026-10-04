@@ -219,8 +219,8 @@
         <h2>Panduan Umum</h2>
         <p>API global <code>window.AM</code> di-inject langsung ke halaman <code>/runtime/preset.html</code>. API ini bersifat <strong>Async / Promise-Based</strong>, aman dari perubahan UI (antarmuka tombol), dan menangani tugas berat secara otomatis.</p>
         <ul>
-            <li><strong>Base Domain Publik:</strong> <code>https://am.zervida.my.id</code></li>
-            <li><strong>URL Player Target:</strong> <code>https://am.zervida.my.id/runtime/preset.html</code></li>
+            <li><strong>Base Domain Publik:</strong> <code>https://alight-web-editor.pages.dev</code></li>
+            <li><strong>URL Player Target:</strong> <code>https://alight-web-editor.pages.dev/runtime/preset.html</code></li>
             <li><strong>Local Dev Target:</strong> <code>http://localhost:3000/runtime/preset.html</code></li>
         </ul>
     </div>
@@ -258,7 +258,7 @@ window.AM.<span class="fn">stopDefaultLoad</span>();</pre>
 <span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://drive.google.com/file/d/FILE_ID/view'</span>);
 
 <span class="cm">// Contoh 3: Direct URL File .xml</span>
-<span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://am.zervida.my.id/preset/TestVideo.xml'</span>);</pre>
+<span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://alight-web-editor.pages.dev/preset/TestVideo.xml'</span>);</pre>
         </div>
 
         <!-- Method: getAvailableProjects & selectProject -->
@@ -419,7 +419,7 @@ console.log(result.durationSec, result.sizeBytes);
     <span class="kw">const</span> page = <span class="kw">await</span> browser.<span class="fn">newPage</span>();
 
     <span class="cm">// Buka runtime preset player</span>
-    <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'https://am.zervida.my.id/runtime/preset.html'</span>);
+    <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'https://alight-web-editor.pages.dev/runtime/preset.html'</span>);
 
     <span class="cm">// Langkah 1: Muat Preset (Secara otomatis membatalkan preset default)</span>
     console.log(<span class="str">'Memuat preset...'</span>);
