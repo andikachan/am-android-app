@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dokumentasi API Otomatisasi AM Web Runtime (window.AM)</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231fc8ee'/%3E%3Cpolygon points='24,16 48,32 24,48' fill='%23000'/%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
 <style>
     :root {
@@ -218,8 +219,8 @@
         <h2>Panduan Umum</h2>
         <p>API global <code>window.AM</code> di-inject langsung ke halaman <code>/runtime/preset.html</code>. API ini bersifat <strong>Async / Promise-Based</strong>, aman dari perubahan UI (antarmuka tombol), dan menangani tugas berat secara otomatis.</p>
         <ul>
-            <li><strong>Base Domain Publik:</strong> <code>https://alight-web-editor.pages.dev</code></li>
-            <li><strong>URL Player Target:</strong> <code>https://alight-web-editor.pages.dev/runtime/preset.html</code></li>
+            <li><strong>Base Domain Publik:</strong> <code>https://am.zervida.my.id</code></li>
+            <li><strong>URL Player Target:</strong> <code>https://am.zervida.my.id/runtime/preset.html</code></li>
             <li><strong>Local Dev Target:</strong> <code>http://localhost:3000/runtime/preset.html</code></li>
         </ul>
     </div>
@@ -257,7 +258,7 @@ window.AM.<span class="fn">stopDefaultLoad</span>();</pre>
 <span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://drive.google.com/file/d/FILE_ID/view'</span>);
 
 <span class="cm">// Contoh 3: Direct URL File .xml</span>
-<span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://alight-web-editor.pages.dev/preset/TestVideo.xml'</span>);</pre>
+<span class="kw">await</span> window.AM.<span class="fn">loadPreset</span>(<span class="str">'https://am.zervida.my.id/preset/TestVideo.xml'</span>);</pre>
         </div>
 
         <!-- Method: getAvailableProjects & selectProject -->
@@ -355,10 +356,31 @@ window.AM.<span class="fn">onLog</span>((msg) => console.log(<span class="str">'
 
 <span class="cm">// Cek progress render</span>
 <span class="kw">const</span> prog = window.AM.<span class="fn">getRenderProgress</span>();
-console.log(prog.progressPct, prog.currentFrame, prog.totalFrames);
+console.log(prog.status, prog.progressPct, prog.currentFrame, prog.totalFrames);
+<span class="cm">// status: 'idle' | 'running' | 'success' | 'failed' | 'cancelled'
+// prog.error berisi alasan singkat kalau status 'failed'</span>
 
 <span class="cm">// Batalkan render jika perlu</span>
 window.AM.<span class="fn">cancelRender</span>();</pre>
+            <p><code>status</code> eksplisit: ekspor baru dianggap <code>success</code> setelah file selesai
+            di-finalize. Audio yang diminta tetapi gagal membuat status <code>failed</code> (bukan video tanpa suara).</p>
+        </div>
+
+        <!-- Method: checkExportSupport -->
+        <div class="method-block">
+            <div class="method-header">
+                <span class="method-name">window.AM.checkExportSupport(options)</span>
+                <span class="badge">Capability Probe</span>
+            </div>
+            <p>Memeriksa kemampuan encoder perangkat <strong>yang sebenarnya</strong> (memanggil
+            <code>VideoEncoder.isConfigSupported()</code> / <code>AudioEncoder.isConfigSupported()</code>,
+            bukan hanya mengecek keberadaan API) sebelum ekspor dijalankan.</p>
+            <pre><span class="kw">const</span> cap = <span class="kw">await</span> window.AM.<span class="fn">checkExportSupport</span>({
+    width: <span class="num">720</span>, height: <span class="num">1280</span>, bitrate: <span class="num">6000000</span>, fps: <span class="num">30</span>, needAudio: <span class="kw">true</span>
+});
+<span class="cm">// cap.mode: 'webcodecs' (MP4/H.264 + AAC) | 'mediarecorder' (WEBM tanpa audio) | 'none'
+// cap.video: { ok, codec, reason }   cap.audio: { ok, needed, sampleRate, channels, reason }
+// cap.reason: alasan singkat kalau mode === 'none'</span></pre>
         </div>
 
         <!-- Method: renderVideo -->
@@ -367,7 +389,8 @@ window.AM.<span class="fn">cancelRender</span>();</pre>
                 <span class="method-name">window.AM.renderVideo(options)</span>
                 <span class="badge">Async Render Engine</span>
             </div>
-            <p>Mengekspor video secara headless dan mengembalikan hasil berupa DataURL Base64 &amp; Blob URL. Mendukung callback <code>onProgress</code> untuk memantau status secara langsung.</p>
+            <p>Mengekspor video secara headless dan mengembalikan hasil berupa DataURL Base64 &amp; Blob URL. Mendukung callback <code>onProgress</code> untuk memantau status secara langsung.
+    Promise <strong>reject</strong> kalau ekspor gagal atau dibatalkan &mdash; tidak pernah mengembalikan hasil setengah jadi.</p>
             <pre><span class="kw">const</span> result = <span class="kw">await</span> window.AM.<span class="fn">renderVideo</span>({
     resolution: <span class="num">720</span>,             <span class="cm">// Resolusi: 360, 540, 720, 1080</span>
     fps: <span class="num">30</span>,                     <span class="cm">// Target FPS: 30, 60</span>
@@ -378,7 +401,8 @@ window.AM.<span class="fn">cancelRender</span>();</pre>
 });
 
 console.log(result.durationSec, result.sizeBytes);
-<span class="cm">// result.base64 berisi "data:video/mp4;base64,..."</span></pre>
+<span class="cm">// result.base64 berisi "data:video/mp4;base64,..."
+// Kalau audio diminta tapi gagal di-encode, promise ini REJECT (bukan hasil video tanpa suara).</span></pre>
         </div>
     </div>
 
@@ -395,7 +419,7 @@ console.log(result.durationSec, result.sizeBytes);
     <span class="kw">const</span> page = <span class="kw">await</span> browser.<span class="fn">newPage</span>();
 
     <span class="cm">// Buka runtime preset player</span>
-    <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'https://alight-web-editor.pages.dev/runtime/preset.html'</span>);
+    <span class="kw">await</span> page.<span class="fn">goto</span>(<span class="str">'https://am.zervida.my.id/runtime/preset.html'</span>);
 
     <span class="cm">// Langkah 1: Muat Preset (Secara otomatis membatalkan preset default)</span>
     console.log(<span class="str">'Memuat preset...'</span>);
@@ -432,6 +456,5 @@ console.log(result.durationSec, result.sizeBytes);
 })();</pre>
     </div>
 </div>
-
 </body>
 </html>
